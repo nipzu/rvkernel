@@ -1,7 +1,7 @@
 .section .text.boot
 _start:
 
-bnez a0, 1f
+bnez a0, .
 lla sp, _stack_end
 
 # TODO: zero bss?

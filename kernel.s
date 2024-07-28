@@ -429,6 +429,10 @@ j 1b
 1:
 .endm
 
+.macro GDB_WAIT_LOOP
+    li t0, 1
+    bnez t0, .
+.endm # GDB_WAIT_LOOP
 
 .global _start
 _start:
@@ -501,6 +505,7 @@ addi s8, t1, -8
 mv s9, t0
 
 # t0 now has a fresh page
+ZERO_PAGE
 
 # TODO: make these not executable later
 # PTE:   DAGUXWRV
@@ -589,8 +594,6 @@ li t2, KERNEL_PAGE_COUNT # TODO: how many pages are needed
 add t4, s9, s10
 add s9, s9, s10
 addi s8, s8, 8
-# mv t0, t4
-# ZERO_PAGE
 
 srli t4, t4, 2
 # PTE:        DAGUXWRV
@@ -612,9 +615,11 @@ add s0, s0, t6
 # PRINT_BIN_64
 
 csrw satp, s0
+sfence.vma
+
 
 csrr a1, satp
-# PRINT_BIN_64
+PRINT_BIN_64
 
 
 li t1, KERNEL_BASE_VADDR
@@ -623,12 +628,6 @@ andi t3, t3, 0x1ff
 slli t3, t3, 3
 add  a1, t3, s4
 # PRINT_BIN_64
-
-
-# TODO: after all allocations, fixup allocation table
-sd zero, (s8)
-addi s8, s8, 8
-# s8 is now the start of the allocation table
 
 lla a5, foo_test
 
@@ -640,6 +639,7 @@ jr a3
 
 foo_test:
 
+# virtual address
 li gp, KERNEL_BASE_VADDR + KERNEL_PAGE_COUNT * PAGE_SIZE
 
 mv a1, gp
@@ -665,9 +665,162 @@ sd zero, GLOBAL_PAGE_SCHED_MCS_OFFSET(gp)
 # TODO: set up rest of gp
 
 
-auipc a1, 0
+# disable execution on direct kernel memory map
+slli t0, t0, 20
+srli t0, t0, 8
+
+li t1, 256
+1:
+    ld t2, (t0)
+    xori t2, t2, 1 << 3 # X bit
+    sd t2, (t0)
+    addi t0, t0, 8
+    addi t1, t1, -1
+    bnez t1, 1b
+
+sfence.vma
+
+
+csrr a1, sstatus
+srli a1, a1, 32
 PRINT_BIN_64
 
+
+
+# INIT PROGRAM SETUP
+# TODO: should these not be rwx
+.equiv INIT_PAYLOAD_LOAD_VADDR, 0x1000000
+# TODO: get size from blob
+.equiv INIT_PAYLOAD_PAGE_COUNT, 16
+.if INIT_PAYLOAD_PAGE_COUNT > 512
+.err 
+.endif
+
+li s1, INIT_PAYLOAD_LOAD_VADDR
+
+# s0 = allocated page
+add s0, s9, s10
+add s9, s9, s10
+addi s8, s8, 8
+mv t0, s0
+ZERO_PAGE
+
+# VPN[2]
+srli t3, s1, 30
+andi t3, t3, 0x1ff
+slli t3, t3, 3
+# make t3 a pointer to the first pte
+add  t3, t3, s0
+
+# copy highmem map
+csrr s7, satp
+slli s7, s7, 20
+srli s7, s7, 8
+
+addi s7, s7, PAGE_SIZE / 4
+addi s7, s7, PAGE_SIZE / 4
+
+addi s0, s0, PAGE_SIZE / 4
+addi s0, s0, PAGE_SIZE / 4
+
+li s6, 256
+1: 
+    ld s5, (s7)
+    sd s5, (s0)
+    addi s0, s0, 8
+    addi s7, s7, 8
+    addi s6, s6, -1
+    bnez s6, 1b
+
+addi s7, s7, -PAGE_SIZE / 2
+addi s7, s7, -PAGE_SIZE / 2
+
+addi s0, s0, -PAGE_SIZE / 2
+addi s0, s0, -PAGE_SIZE / 2
+
+# t2 = allocated page
+li s10, PAGE_SIZE
+add t2, s9, s10
+add s9, s9, s10
+addi s8, s8, 8
+mv t0, t2
+ZERO_PAGE
+
+srli t4, t2, 2
+ori t4, t4, 1 # V bit
+sd t4, (t3)
+
+# VPN[1]
+srli t3, s1, 21
+andi t3, t3, 0x1ff
+slli t3, t3, 3
+# make t2 a pointer to the second pte
+add t2, t2, t3
+
+# t4 = allocated page
+add t4, s9, s10
+add s9, s9, s10
+addi s8, s8, 8
+mv t0, t4
+ZERO_PAGE
+
+srli t5, t4, 2
+ori t5, t5, 1 # V bit
+sd t5, (t2)
+
+# VPN[0]
+srli t3, s1, 12
+andi t3, t3, 0x1ff
+slli t3, t3, 3
+# make t3 a pointer to the third pte
+add t3, t3, t4
+
+# zero out top 8 bits
+li s1, DRAM_START
+lla t4, init_program_payload_start
+add s1, s1, t4
+lla t4, _start
+sub s1, s1, t4
+
+srli s1, s1, 2
+# PTE:        DAGUXWRV
+ori s1, s1, 0b11011111
+li t2, INIT_PAYLOAD_PAGE_COUNT # TODO: how many pages are needed
+1: 
+    sd s1, (t3)
+    addi s1, s1, 1024
+    addi t3, t3, 8
+    addi t2, t2, -1
+    bnez t2, 1b
+
+# TODO: after all allocations, fixup allocation table
+sd zero, (s8)
+addi s8, s8, 8
+# s8 is now the start of the allocation table
+
+# TODO: senvcfg
+
+
+# s0 = to be new satp
+srli s0, s0, 12
+li t1, 1
+slli t1, t1, 63
+add s0, s0, t1
+
+# keep asid as all zeros
+
+csrw satp, s0
+sfence.vma
+
+lla t0, handle_exception
+csrw stvec, t0
+
+# j shutdown
+
+li t0, INIT_PAYLOAD_LOAD_VADDR
+csrw sepc, t0
+
+sret
 j shutdown
 
 
@@ -853,6 +1006,11 @@ li a0, 0
 li a1, 0
 ecall
 
+# mv a1, a0
+# PRINT_BIN_64
+
+j shutdown
+
 # check if x1 belongs to address space x3
 
 # store PTE PPN mask in x4
@@ -963,6 +1121,41 @@ ecall
 j shutdown
 
 handle_exception:
+
+
+li a7, 1
+li a0, 'e'
+ecall
+li a0, 'x'
+ecall
+li a0, 'c'
+ecall
+li a0, 'e'
+ecall
+li a0, 'p'
+ecall
+li a0, 't'
+ecall
+li a0, 'i'
+ecall
+li a0, 'o'
+ecall
+li a0, 'n'
+ecall
+li a0, 10
+ecall
+
+# TODO: temporary
+csrr a1, scause
+PRINT_BIN_64
+csrr a1, stval
+PRINT_BIN_64
+csrr a1, sepc
+PRINT_BIN_64
+
+j shutdown
+
+
 # TODO: what fences
 fence iorw, iorw
 sfence.vma x0, x0
@@ -1326,6 +1519,13 @@ vmmap_create:
 #
 # fail:
 
-# .balign PAGE_SIZE
-# init_program_payload_start:
-# j .
+.balign PAGE_SIZE
+init_program_payload_start:
+
+auipc t0, 0
+li t1, -4096*16
+add t0, t0, t1
+sd a0, (t0)
+ecall
+mret
+j .
