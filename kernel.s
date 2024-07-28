@@ -5,6 +5,7 @@
 .equiv EXEC_PAGE_SCHED_NEXT_OFFSET, 0x100
 .equiv EXEC_PAGE_VAS_PADDR_OFFSET,  0x118
 .equiv EXEC_PAGE_STATUS_OFFSET,     0x200
+.equiv EXEC_PAGE_DUMMY_SC_OFFSET,   0x300
 .equiv EXEC_PAGE_REFCOUNT_OFFSET,   0x400
 .equiv EXEC_PAGE_MCS_NEXT_OFFSET,   0x600
 .equiv EXEC_PAGE_MCS_LOCKED_OFFSET, 0x700
@@ -33,6 +34,7 @@
 .equiv PAGE_TABLE_OFFSET, (4096 * ((PAGE_COUNT + 255) / 256))
 .equiv PAGE_SIZE, 4096
 
+.equiv SYSCALL_TERMINATE, 1
 .equiv SYSCALL_PARK, 2
 .equiv SYSCALL_YIELD, 10
 
@@ -960,46 +962,57 @@ bnez a3, print_loop
 
 j sleep
 
+# loads all registers other than a0 and a1
 return_to_user:
-csrw sscratch, fp
-ld t1, 0x00(fp)
-csrw sepc, t1
-sd tp,  0x00(fp)
-ld x1,  0x08(fp)
-ld x2,  0x10(fp)
-ld x3,  0x18(fp)
-ld x4,  0x20(fp)
-ld x5,  0x28(fp)
-ld x6,  0x30(fp)
-ld x7,  0x38(fp)
-# no x8/fp
-ld x9,  0x48(fp)
-ld x10, 0x50(fp)
-ld x11, 0x58(fp)
-ld x12, 0x60(fp)
-ld x13, 0x68(fp)
-ld x14, 0x70(fp)
-ld x15, 0x78(fp)
-ld x16, 0x80(fp)
-ld x17, 0x88(fp)
-ld x18, 0x90(fp)
-ld x19, 0x98(fp)
-ld x20, 0xa0(fp)
-ld x21, 0xa8(fp)
-ld x22, 0xb0(fp)
-ld x23, 0xb8(fp)
-ld x24, 0xc0(fp)
-ld x25, 0xc8(fp)
-ld x26, 0xd0(fp)
-ld x27, 0xd8(fp)
-ld x28, 0xe0(fp)
-ld x29, 0xe8(fp)
-ld x30, 0xf0(fp)
-ld x31, 0xf8(fp)
-ld fp,  0x40(fp)
-fence.i
-sfence.vma x0, x0
-fence iorw, iorw
+
+# dummy sc store
+addi t0, tp, EXEC_PAGE_DUMMY_SC_OFFSET
+sc.d t0, t0, (t0)
+
+# set return address
+ld t0, 0x00(tp)
+csrw sepc, t0
+
+ld x1,  0x08(tp)
+ld x2,  0x10(tp)
+ld x3,  0x18(tp)
+#  x4 = tp
+ld x5,  0x28(tp)
+ld x6,  0x30(tp)
+ld x7,  0x38(tp)
+ld x8,  0x40(tp)
+ld x9,  0x48(tp)
+#  x10 = a0
+#  x11 = a1
+ld x12, 0x60(tp)
+ld x13, 0x68(tp)
+ld x14, 0x70(tp)
+ld x15, 0x78(tp)
+ld x16, 0x80(tp)
+ld x17, 0x88(tp)
+ld x18, 0x90(tp)
+ld x19, 0x98(tp)
+ld x20, 0xa0(tp)
+ld x21, 0xa8(tp)
+ld x22, 0xb0(tp)
+ld x23, 0xb8(tp)
+ld x24, 0xc0(tp)
+ld x25, 0xc8(tp)
+ld x26, 0xd0(tp)
+ld x27, 0xd8(tp)
+ld x28, 0xe0(tp)
+ld x29, 0xe8(tp)
+ld x30, 0xf0(tp)
+ld x31, 0xf8(tp)
+
+# finally, load tp
+ld tp,  0x20(tp)
+
+# TODO: what fences
+# fence.i
+# sfence.vma
+# fence iorw, iorw
+fence rw, rw
 sret
 
 sleep:
@@ -1113,23 +1126,6 @@ found_leaf:
 
 fail:
 
-kernel_panic:
-li a7, 1
-li a0, 'P'
-ecall
-li a0, 'A'
-ecall
-li a0, 'N'
-ecall
-li a0, 'I'
-ecall
-li a0, 'C'
-ecall
-li a0, '!'
-ecall
-li a0, 10
-ecall
-j shutdown
 
 handle_exception:
 
@@ -1259,45 +1255,22 @@ ecall
 csrr a1, sepc
 PRINT_BIN_64
 
-# TODO: if ecall
-# csrr t0, sepc
-# addi t0, t0, 4
-# csrw sepc, t0
-
 # sret
-j shutdown
+# j shutdown
 
-li a7, 1
-li a0, 's'
-ecall
-li a0, 'y'
-ecall
-li a0, 's'
-ecall
-li a0, 'c'
-ecall
-li a0, 'a'
-ecall
-li a0, 'l'
-ecall
-li a0, 'l'
-ecall
-li a0, 10
-ecall
-j shutdown
-
-
-csrr x3, scause
+csrr t0, scause
 # branch if bit 63 set = interrupt bit
-bltz x3, handle_interrupt
+bltz t0, handle_interrupt
 
 # this is an exception
-li x4, 8
-beq x3, x4, handle_syscall
-# this exception is not a system call
+li t1, 8
+beq t0, t1, handle_syscall
 
+# this exception is not a system call
+# terminate the running executor
 
 executor_terminate:
+j shutdown
 # mark executor page terminated
 li x2, EXEC_TERMINATED
 # TODO: fence needed? (or uniquely owned???)
@@ -1354,15 +1327,74 @@ j return_to_user
 
 handle_syscall:
 
-li x1, SYSCALL_YIELD
-beq x1, a0, executor_yield
+li a7, 1
+li a0, 's'
+ecall
+li a0, 'y'
+ecall
+li a0, 's'
+ecall
+li a0, 'c'
+ecall
+li a0, 'a'
+ecall
+li a0, 'l'
+ecall
+li a0, 'l'
+ecall
+li a0, 10
+ecall
 
-li x1, SYSCALL_PARK
-beq x1, a0, executor_park
+# TODO: maybe keep in register
+ld a0, 0x50(tp)
+
+li t0, SYSCALL_YIELD
+beq t0, a0, executor_yield
+
+li t0, SYSCALL_PARK
+beq t0, a0, executor_park
+
+# TODO: should be the default fallthrough
+li t0, SYSCALL_TERMINATE
+beq t0, a0, executor_terminate
+
+# TODO: if ecall
+csrr t0, sepc
+addi t0, t0, 4
+csrw sepc, t0
+ld t0, (tp)
+addi t0, t0, 4
+sd t0, (tp)
+
+j return_to_user
+
 
 j executor_terminate
 
 handle_interrupt:
+
+li a7, 1
+li a0, 'i'
+ecall
+li a0, 'n'
+ecall
+li a0, 't'
+ecall
+li a0, 'e'
+ecall
+li a0, 'r'
+ecall
+li a0, 'r'
+ecall
+li a0, 'u'
+ecall
+li a0, 'p'
+ecall
+li a0, 't'
+ecall
+li a0, 10
+ecall
+j shutdown
 
 
 
@@ -1502,6 +1534,23 @@ vmmap_create:
 
 
 
+kernel_panic:
+li a7, 1
+li a0, 'P'
+ecall
+li a0, 'A'
+ecall
+li a0, 'N'
+ecall
+li a0, 'I'
+ecall
+li a0, 'C'
+ecall
+li a0, '!'
+ecall
+li a0, 10
+ecall
+j shutdown
 
 
 # check that x1 is in user memory
@@ -1592,7 +1641,108 @@ vmmap_create:
 .balign PAGE_SIZE
 init_program_payload_start:
 
-auipc t0, 0
+li x1, 1
+li x2, 2
+li x3, 3
+li x4, 4
+li x5, 5
+li x6, 6
+li x7, 7
+li x8, 8
+li x9, 9
+#li x10, 10
+#li x11, 11
+li x12, 12
+li x13, 13
+li x14, 14
+li x15, 15
+li x16, 16
+li x17, 17
+li x18, 18
+li x19, 19
+li x20, 20
+li x21, 21
+li x22, 22
+li x23, 23
+li x24, 24
+li x25, 25
+li x26, 26
+li x27, 27
+li x28, 28
+li x29, 29
+li x30, 30
+li x31, 31
+
 ecall
 
+li a0, 1
+bne a0, x1, 2f
+li a0, 2
+bne a0, x2, 2f
+li a0, 3
+bne a0, x3, 2f
+li a0, 4
+bne a0, x4, 2f
+li a0, 5
+bne a0, x5, 2f
+li a0, 6
+bne a0, x6, 2f
+li a0, 7
+bne a0, x7, 2f
+li a0, 8
+bne a0, x8, 2f
+li a0, 9
+bne a0, x9, 2f
+# li a0, 10
+# bne a0, x10, 2f
+# li a0, 11
+# bne a0, x11, 2f
+li a0, 12
+bne a0, x12, 2f
+li a0, 13
+bne a0, x13, 2f
+li a0, 14
+bne a0, x14, 2f
+li a0, 15
+bne a0, x15, 2f
+li a0, 16
+bne a0, x16, 2f
+li a0, 17
+bne a0, x17, 2f
+li a0, 18
+bne a0, x18, 2f
+li a0, 19
+bne a0, x19, 2f
+li a0, 20
+bne a0, x20, 2f
+li a0, 21
+bne a0, x21, 2f
+li a0, 22
+bne a0, x22, 2f
+li a0, 23
+bne a0, x23, 2f
+li a0, 24
+bne a0, x24, 2f
+li a0, 25
+bne a0, x25, 2f
+li a0, 26
+bne a0, x26, 2f
+li a0, 27
+bne a0, x27, 2f
+li a0, 28
+bne a0, x28, 2f
+li a0, 29
+bne a0, x29, 2f
+li a0, 30
+bne a0, x30, 2f
+li a0, 31
+bne a0, x31, 2f
+
+1:
+li a0, 1
+ecall
+mret
+j .
+
+2:
 j .
