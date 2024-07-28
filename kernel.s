@@ -448,7 +448,7 @@ _start:
 .equiv PAGE_TABLE_PAGE_COUNT, 63 # = (32768 - 512) / 512
 .equiv PREALLOCATED_PAGE_COUNT, KERNEL_PAGE_COUNT + PAGE_TABLE_PAGE_COUNT
 #.equiv KERNEL_BASE_VADDR,   0xfffffffffff00000
-.equiv KERNEL_BASE_VADDR, 0xffffffcaaaa80000
+.equiv KERNEL_BASE_VADDR, 0xffffffd555540000
 
 
 
@@ -459,6 +459,9 @@ _start:
 
 csrw sie, zero
 csrw sip, zero
+
+lla t0, kernel_panic
+csrw stvec, t0
 
 lla t0, _start
 li t1, DRAM_START
@@ -689,10 +692,12 @@ PRINT_BIN_64
 
 # INIT PROGRAM SETUP
 # TODO: should these not be rwx
-.equiv INIT_PAYLOAD_LOAD_VADDR, 0x1000000
+.equiv INIT_PAYLOAD_LOAD_VADDR, 0x100000
+# TODO: hardcoded to be on the same megapage
+# .equiv INIT_EXEC_PAGE_VADDR, 0x80000
 # TODO: get size from blob
 .equiv INIT_PAYLOAD_PAGE_COUNT, 16
-.if INIT_PAYLOAD_PAGE_COUNT > 512
+.if INIT_PAYLOAD_PAGE_COUNT > 256
 .err 
 .endif
 
@@ -777,10 +782,10 @@ add t3, t3, t4
 
 # zero out top 8 bits
 li s1, DRAM_START
-lla t4, init_program_payload_start
-add s1, s1, t4
-lla t4, _start
-sub s1, s1, t4
+lla t5, init_program_payload_start
+add s1, s1, t5
+lla t5, _start
+sub s1, s1, t5
 
 srli s1, s1, 2
 # PTE:        DAGUXWRV
@@ -792,6 +797,19 @@ li t2, INIT_PAYLOAD_PAGE_COUNT # TODO: how many pages are needed
     addi t3, t3, 8
     addi t2, t2, -1
     bnez t2, 1b
+
+
+# set up executor page at 0x80000
+add t3, s9, s10
+add s9, s9, s10
+addi s8, s8, 8
+mv t0, t3
+ZERO_PAGE
+
+srli t3, t3, 2
+# PTE:        DAGUXWRV
+ori t3, t3, 0b11000111
+sd t3, 8*128(t4)
 
 # TODO: after all allocations, fixup allocation table
 sd zero, (s8)
@@ -808,17 +826,17 @@ slli t1, t1, 63
 add s0, s0, t1
 
 # keep asid as all zeros
-
 csrw satp, s0
 sfence.vma
 
 lla t0, handle_exception
 csrw stvec, t0
 
-# j shutdown
-
 li t0, INIT_PAYLOAD_LOAD_VADDR
 csrw sepc, t0
+
+li t0, 0x80000
+csrw sscratch, t0
 
 sret
 j shutdown
@@ -836,6 +854,7 @@ csrw sie, a0
 li a1, 2
 csrs sstatus, a1
 
+# timer
 li a7, 0x54494D45
 li a6, 0
 li a1, 0
@@ -855,14 +874,6 @@ PRINT_BIN_64
 # PRINT_BIN_64
 
 j sleep
-
-boot_start:
-j shutdown
-
-
-
-
-
 
 
 
@@ -1122,6 +1133,49 @@ j shutdown
 
 handle_exception:
 
+# TODO: need fences?
+# fence iorw, iorw
+# sfence.vma x0, x0
+# fence.i
+
+# sscretch is pointer to executor page
+csrrw tp, sscratch, tp
+sd x1,  0x08(tp)
+sd x2,  0x10(tp)
+sd x3,  0x18(tp)
+# don't store the tp
+sd x5,  0x28(tp)
+sd x6,  0x30(tp)
+sd x7,  0x38(tp)
+sd x8,  0x40(tp)
+sd x9,  0x48(tp)
+sd x10, 0x50(tp)
+sd x11, 0x58(tp)
+sd x12, 0x60(tp)
+sd x13, 0x68(tp)
+sd x14, 0x70(tp)
+sd x15, 0x78(tp)
+sd x16, 0x80(tp)
+sd x17, 0x88(tp)
+sd x18, 0x90(tp)
+sd x19, 0x98(tp)
+sd x20, 0xa0(tp)
+sd x21, 0xa8(tp)
+sd x22, 0xb0(tp)
+sd x23, 0xb8(tp)
+sd x24, 0xc0(tp)
+sd x25, 0xc8(tp)
+sd x26, 0xd0(tp)
+sd x27, 0xd8(tp)
+sd x28, 0xe0(tp)
+sd x29, 0xe8(tp)
+sd x30, 0xf0(tp)
+sd x31, 0xf8(tp)
+
+csrrw t0, sscratch, tp
+sd t0, 0x20(tp)
+csrr t0, sepc
+sd t0, 0x00(tp)
 
 li a7, 1
 li a0, 'e'
@@ -1145,57 +1199,73 @@ ecall
 li a0, 10
 ecall
 
-# TODO: temporary
+li a7, 1
+li a0, 's'
+ecall
+li a0, 'c'
+ecall
+li a0, 'a'
+ecall
+li a0, 'u'
+ecall
+li a0, 's'
+ecall
+li a0, 'e'
+ecall
+li a0, ':'
+ecall
+li a0, ' '
+ecall
 csrr a1, scause
 PRINT_BIN_64
+
+li a7, 1
+li a0, 's'
+ecall
+li a0, 't'
+ecall
+li a0, 'v'
+ecall
+li a0, 'a'
+ecall
+li a0, 'l'
+ecall
+li a0, ':'
+ecall
+li a0, ' '
+ecall
+li a0, ' '
+ecall
 csrr a1, stval
 PRINT_BIN_64
+
+li a7, 1
+li a0, 's'
+ecall
+li a0, 'e'
+ecall
+li a0, 'p'
+ecall
+li a0, 'c'
+ecall
+li a0, ':'
+ecall
+li a0, ' '
+ecall
+li a0, ' '
+ecall
+li a0, ' '
+ecall
 csrr a1, sepc
 PRINT_BIN_64
 
+# TODO: if ecall
+# csrr t0, sepc
+# addi t0, t0, 4
+# csrw sepc, t0
+
+# sret
 j shutdown
-
-
-# TODO: what fences
-fence iorw, iorw
-sfence.vma x0, x0
-fence.i
-# sscretch is pointer to executor page
-csrrw x1, sscratch, x1
-sd x2,  0x10(x1)
-sd x3,  0x18(x1)
-sd x4,  0x20(x1)
-sd x5,  0x28(x1)
-sd x6,  0x30(x1)
-sd x7,  0x38(x1)
-sd x8,  0x40(x1)
-sd x9,  0x48(x1)
-sd x10, 0x50(x1)
-sd x11, 0x58(x1)
-sd x12, 0x60(x1)
-sd x13, 0x68(x1)
-sd x14, 0x70(x1)
-sd x15, 0x78(x1)
-sd x16, 0x80(x1)
-sd x17, 0x88(x1)
-sd x18, 0x90(x1)
-sd x19, 0x98(x1)
-sd x20, 0xa0(x1)
-sd x21, 0xa8(x1)
-sd x22, 0xb0(x1)
-sd x23, 0xb8(x1)
-sd x24, 0xc0(x1)
-sd x25, 0xc8(x1)
-sd x26, 0xd0(x1)
-sd x27, 0xd8(x1)
-sd x28, 0xe0(x1)
-sd x29, 0xe8(x1)
-sd x30, 0xf0(x1)
-sd x31, 0xf8(x1)
-csrr x2, sscratch
-sd x2, 0x08(x1)
-csrr x2, sepc
-sd x2, 0x00(x1)
 
 li a7, 1
 li a0, 's'
@@ -1523,9 +1593,6 @@ vmmap_create:
 init_program_payload_start:
 
 auipc t0, 0
-li t1, -4096*16
-add t0, t0, t1
-sd a0, (t0)
 ecall
-mret
+
 j .

@@ -7,3 +7,4 @@
  - how to map page address -> refcount/alloc struct
  - move mcs_lock state from hart to executor (remove hart page completely?)
  - dram should be in lowest 38 bits of physaddr
+ - fp and s0 confusion?
