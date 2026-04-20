@@ -14,7 +14,7 @@
 - `a0/x10`: err
 - `a1/x11`: res1
 
-## Permissions
+## Permissions (per executor)
 - executor_create
 - vas_create
 

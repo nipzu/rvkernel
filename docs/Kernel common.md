@@ -2,8 +2,9 @@
 - x3/gp = global kernel page
 - x4/tp = hart page
 - x8/fp = current executor
-- aX registers used for syscall args/res
-- tX registers can be used, macros can garble
+- aX registers used for syscall args/res, kernel code should mostly not modify them
+- sX registers can be used by normal kernel code but must not be changed by macros
+- tX registers can be used and clobbered by macros
 -- x3 = kernel satp
 -- x4 = page allocator
 
