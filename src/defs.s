@@ -41,6 +41,8 @@
 
 .equiv USERSPACE_VADDR_BITS, 38
 
+# TODO: define LOAD_ACQUIRE, STORE_RELEASE, HINT_PAUSE
+
 #####################
 # MACRO DEFINITIONS #
 #####################
@@ -54,24 +56,24 @@
 # out:
 #  t2 = undef
 .macro MCS_LOCK
-    # TODO: release for zeroing to be visible
+    # reset hart lock memory vars, MCS_LOCKED needs to always be set, 
+    # MCS_NEXT technicaly only after unlocking and having a next in queue
+    sd zero, EXEC_PAGE_MCS_LOCKED_OFFSET(fp)
+    sd t1, EXEC_PAGE_MCS_NEXT_OFFSET(fp)
     # TODO: interrupts?
-    # set queue end to current hart
-    amoswap.d t2, fp, (t0)
-    # if the queue was empty, exit
-    beq t1, t2, .L\@_end
-    # set next of prev to current hart
-    sd fp, EXEC_PAGE_MCS_NEXT_OFFSET(t2)
+    amoswap.d.aqrl t2, fp, (t0)             # set queue end to current hart
+    beq t1, t2, .L\@_end                    # if the queue was empty, exit
+    sd fp, EXEC_PAGE_MCS_NEXT_OFFSET(t2)    # set next of prev to current hart
     .L\@_try_lock:
         # wait for prev to give lock
         # TODO: spin loop hint
-        # pause
+        # HINT_PAUSE
         ld t2, EXEC_PAGE_MCS_LOCKED_OFFSET(fp)
         beqz t2, .L\@_try_lock
+    # r, w ordering comes from the syntactical control dependency with ld and beqz
+    # fence r,r provides ppo ordering for the critical section with the ld in try_lock
+    fence r,r
 .L\@_end:
-    # acquire fence
-    # TODO: can this be relaxed to r,r
-    fence r,rw
 .endm # MCS_LOCK
 
 
@@ -86,26 +88,27 @@
     .L\@_cas:
         # try to clear queue if cur is last
         lr.d t2, (t0)
-        # cur != last => queue not empty
-        bne t2, fp, .L\@_ld_next
+        bne t2, fp, .L\@_ld_next # cur != last => queue not empty
         sc.d.rl t2, t1, (t0)
-        # cas failed, try again
-        bnez t2, .L\@_cas
-        # TODO: fence here?
+        bnez t2, .L\@_cas # cas failed, try again
     # success, exit
     j .L\@_end
 
+    # load next in queue, loop while
+    # waiting for next hart to update next ptr
     .L\@_ld_next:
-        # load next in queue, loop while
-        # waiting for next hart to update next ptr
+    ld t2, EXEC_PAGE_MCS_NEXT_OFFSET(fp)
+    bne t2, t1, .L\@_unlock_next
+
+    .L\@_spin_wait:
+        # TODO: HINT_PAUSE
         ld t2, EXEC_PAGE_MCS_NEXT_OFFSET(fp)
-        beq t2, t1, .L\@_ld_next
+        beq t2, t1, .L\@_spin_wait
+
+    .L\@_unlock_next:
     # release store, unlock lock for next
     fence rw, w
     sd t1, EXEC_PAGE_MCS_LOCKED_OFFSET(t2)
-    # reset hart lock memory vars
-    sd zero, EXEC_PAGE_MCS_LOCKED_OFFSET(fp)
-    sd t1, EXEC_PAGE_MCS_NEXT_OFFSET(fp)
 .L\@_end:
 .endm # MCS_UNLOCK
 
