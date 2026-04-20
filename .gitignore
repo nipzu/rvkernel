@@ -2,5 +2,6 @@
 /kernel.bin
 /dump.txt
 /out.txt
+/fw_jump.elf
 /docs/.obsidian/
 /.gdb_history

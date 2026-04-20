@@ -38,4 +38,4 @@ dump: build/kernel.elf
 .PHONY: clean
 clean:
 	rm -rf build
-	rm -f dump.txt out.txt kernel.bin
+	rm -f dump.txt out.txt kernel.bin fw_jump.elf
